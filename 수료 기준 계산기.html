@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>수료 기준 계산기</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f6;color:#171719;font:15px "Malgun Gothic",sans-serif}main{max-width:1160px;margin:auto;padding:42px clamp(16px,4vw,48px)}header,.bar,.settings,nav{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}header{border-bottom:4px solid;padding-bottom:18px}h1{margin:0;font-size:clamp(30px,5vw,52px);letter-spacing:-.065em}h2{font-size:22px;letter-spacing:-.05em;margin:0}header strong{border-left:4px solid #ee2b48;padding-left:12px}section{background:white;margin-top:22px;padding:22px;border:1px solid #ccc}.settings{justify-content:flex-start}.settings label{font-weight:bold}select,button,input{font:inherit;color:inherit;border:1px solid #aaa;background:white;padding:8px}button,select{cursor:pointer}button:hover{background:#eee}.primary{background:#19191b;color:white;border-color:#19191b}.primary:hover{background:#333}#schedule{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px}#schedule label{background:#f5f5f6;padding:8px 12px;font-weight:bold}input.time{width:76px;text-align:center;font-variant-numeric:tabular-nums}p,small{color:#606168}p{margin:14px 0 0}.scroll{overflow:auto;margin-top:16px}table{width:100%;border-collapse:collapse;text-align:center;white-space:nowrap}th,td{padding:9px;border-bottom:1px solid #ddd}th{background:#f3f3f4;border-top:2px solid #181818;font-size:13px}td.name{font-weight:bold}tr.warn{background:#fff0f2;color:#a41432}tr.warn td:last-child{font-weight:bold}#empty{padding:48px 8px;color:#666}nav{justify-content:center;margin-top:16px}button[aria-current]{background:#19191b;color:white}#msg{color:#a41432}input:focus-visible,button:focus-visible,select:focus-visible{outline:2px solid #414d86}#source{overflow-wrap:anywhere}
+
+main{max-width:1560px}header{justify-content:center;position:relative;border-bottom:2px solid}header h1{font-size:34px;letter-spacing:.28em}header strong{font-size:14px}section{border:0}section+section{border:1px solid #929292}th,td{border:1px solid #8a8a8a;padding:5px 3px}th{background:#f8f8f8}thead tr:first-child th{border-top:2px solid #222}.event{padding:0;border-left-style:dotted;border-right-style:dotted}.event input,.clock{border:0;background:transparent;text-align:center;width:5.4ch;box-sizing:content-box;padding:9px 3px;font:14px Consolas,monospace;color:inherit}.clock{border-bottom:1px solid #999;font-weight:bold}.event input::placeholder{color:#bbb}.event input:focus,.clock:focus{outline:2px solid #385981;outline-offset:-2px;background:#fff}td input:disabled{opacity:.3}.bar{margin-bottom:12px}.bar strong{font-size:14px}#msg:empty{display:none}td.name{min-width:5em}
+
+th.actual-time{background:#174951;color:#fff;font-size:15px}
+td.actual-time{background:#e5f3f1;color:#113f45;font-size:18px;font-weight:800;font-variant-numeric:tabular-nums}
+th.actual-time,td.actual-time{min-width:5rem;border-inline:2px solid #47777a}
+tr.warn td.actual-time{background:#ffdae0;color:#94132c;border-inline-color:#aa5261}
+
+.name input{width:8em;max-width:100%;background:transparent;border:0;text-align:center;font-weight:bold}
+tbody tr:nth-child(even):not(.warn){background:#edf0f3}
+tbody tr:nth-child(even):not(.warn) .actual-time{background:#d6eae7}
+</style>
+<main><header><h1>출석부</h1><strong>출석률 80% 이상 수료</strong></header>
+<section><div class="settings"><label for="kind">교육시간 유형</label><select id="kind"><option>2일 · 14시간</option><option>3일 · 18시간 (월화수)</option><option>3일 · 18시간 (수목금)</option><option>3일 · 21시간</option><option>1일 · 7시간</option></select><button id="reset">전체 초기화</button></div></section>
+<section><div class="bar"><h2>수강시간 계산</h2><strong id="threshold"></strong></div><p>빈칸은 정상 출석입니다. 외출 시 복귀 시각도 입력하세요. 점심시간(12:30~13:30)은 제외됩니다.</p><div class="scroll"><table><thead id="head"></thead><tbody id="rows"></tbody></table></div><nav id="pages" aria-label="출석부 페이지"></nav></section></main><script>
+const $=id=>document.getElementById(id);
+const regular=['10:00','18:00'], longDay=['09:30','18:00'];
+const schedules=[[regular,regular],[longDay,longDay,['09:30','12:30']],[['15:00','18:00'],longDay,longDay],[regular,regular,regular],[regular]].map(days=>days.map(pair=>pair.slice()));
+const labels=['지각','외출','복귀','조퇴'];
+const format=n=>Math.floor(n/60)+':'+String(n%60).padStart(2,'0');
+function blankRoster(){return Array.from({length:36},()=>({name:'',times:{}}))}
+const defaultSchedules=structuredClone(schedules);
+let people=blankRoster(),page=0,active=0;
+function minute(value){
+ const match=/^(\d{1,2}):?([0-5]\d)$/.exec(value.trim());
+ return match && +match[1]<24 ? +match[1]*60 + +match[2] : NaN;
+}
+function teaching(start,end){
+ return end-start-Math.max(0,Math.min(end,810)-Math.max(start,750));
+}
+function attendance(pair,record){
+ const [start,end]=pair.map(minute);
+ if(!(end>start && teaching(start,end)>0))return NaN;
+ if(record.absent)return 0;
+ const [late,out,back,early]=record.values;
+ const from=late?minute(late):start,to=early?minute(early):end;
+ if(!(start<=from && from<=to && to<=end))return NaN;
+ if(!out&&!back)return teaching(from,to);
+ const leave=minute(out),resume=minute(back);
+ if(!(from<=leave&&leave<=resume&&resume<=to))return NaN;
+ return teaching(from,to)-teaching(leave,resume);
+}
+function clockInput(value,label,edit){
+ const el=document.createElement('input');el.value=value;el.placeholder='--:--';el.maxLength=5;
+ el.setAttribute('aria-label',label);el.title=label+' (예: 10:30)';
+ el.oninput=()=>edit(el.value.trim());
+ el.onblur=()=>{const n=minute(el.value);if(Number.isFinite(n)){el.value=format(n).padStart(5,'0');edit(el.value)}};
+ return el;
+}
+function renderSchedule(){
+ const days=schedules[active], head=$('head');head.replaceChildren();
+ const groups=head.insertRow(), times=head.insertRow(), fields=head.insertRow();
+ function heading(row,text,span=1,depth=1){const cell=document.createElement('th');cell.textContent=text;if(text==='실제시간')cell.className='actual-time';cell.colSpan=span;cell.rowSpan=depth;row.append(cell);return cell}
+ heading(groups,'번호',1,3);heading(groups,'성명',1,3);
+ days.forEach((pair,i)=>{
+ heading(groups,(i+1)+'일차',5);
+ pair.forEach((v,j)=>{
+ const label=['시작','종료'][j];
+ const cell=heading(times,label+' ',2);
+ const el=clockInput(v,(i+1)+'일차 강의 '+label,value=>{pair[j]=value;renderRows()});el.className='clock';cell.append(el);
+ });
+ heading(times,'결석',1,2);
+ labels.forEach(label=>heading(fields,label));
+ });
+ ['소정시간','실제시간','출석률','수료 판정'].forEach(label=>heading(groups,label,1,3));
+ renderRows();
+}
+function renderRows(){
+ const days=schedules[active];
+ const total=days.reduce((sum,pair)=>sum+attendance(pair,{values:[]}),0);
+ $('threshold').textContent=Number.isFinite(total)?'소정 '+format(total)+'  /  수료 '+format(Math.ceil(total*4/5))+' 이상':'강의 시작·종료 시각을 확인하세요';
+ $('rows').replaceChildren();
+ people.slice(page*12,page*12+12).forEach((p,index)=>{
+ const row=$('rows').insertRow();row.insertCell().textContent=page*12+index+1;
+ const name=row.insertCell();name.className='name';const edit=document.createElement('input');
+ edit.value=p.name;edit.setAttribute('aria-label',(page*12+index+1)+'번 성명');
+ edit.oninput=()=>{p.name=edit.value;refresh()};name.append(edit);
+ const records=p.times[active]??=days.map(()=>({values:['','','',''],absent:false}));
+ days.forEach((pair,i)=>{
+ const record=records[i],prefix=p.name+' '+(i+1)+'일차 ';
+ const inputs=labels.map((label,j)=>{
+ const cell=row.insertCell();cell.className='event';
+ const input=clockInput(record.values[j],prefix+label,value=>{record.values[j]=value;refresh()});
+ input.disabled=record.absent;cell.append(input);return input;
+ });
+ const box=document.createElement('input');box.type='checkbox';box.checked=record.absent;box.setAttribute('aria-label',prefix+'결석');
+ box.onchange=()=>{record.absent=box.checked;inputs.forEach(el=>el.disabled=box.checked);refresh()};row.insertCell().append(box);
+ });
+ const cells=Array.from({length:4},()=>row.insertCell());
+ cells[1].className='actual-time';
+ function refresh(){
+ const actual=days.reduce((sum,pair,i)=>sum+attendance(pair,records[i]),0);
+ const missing=records.filter(r=>!r.absent).find(r=>Boolean(r.values[1])!==Boolean(r.values[2]));
+ const issue=missing?(missing.values[1]?'복귀 시각 입력':'외출 시각 입력'):'시간 확인';
+ const ok=Number.isFinite(actual),pass=ok&&actual*5>=total*4;
+ const values=[Number.isFinite(total)?format(total):'—',ok?format(actual):'—',ok?(Math.floor(actual*1000/total)/10)+'%':'—',ok?(pass?'수료':'미수료'):issue];
+ const occupied=Boolean(p.name.trim())||records.some(r=>r.absent||r.values.some(Boolean));
+ cells.forEach((cell,i)=>cell.textContent=occupied?values[i]:'');row.classList.toggle('warn',occupied&&!pass);
+ }
+ refresh();
+ });
+ $('pages').replaceChildren();
+ for(let i=0;i<Math.ceil(people.length/12);i++){const b=document.createElement('button');b.textContent=(i+1)+'페이지';if(i===page)b.setAttribute('aria-current','page');b.onclick=()=>{page=i;renderRows()};$('pages').append(b)}
+}
+$('kind').onchange=()=>{active=$('kind').selectedIndex;renderSchedule()};
+$('reset').onclick=()=>{
+ if(!confirm('36명의 성명과 모든 출결 기록을 지우고 교육시간 설정도 처음 상태로 되돌릴까요?'))return;
+ people=blankRoster();page=0;active=0;
+ schedules.splice(0,schedules.length,...structuredClone(defaultSchedules));
+ $('kind').selectedIndex=0;renderSchedule();
+};
+renderSchedule();
+</script></html>
